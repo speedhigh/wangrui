@@ -121,16 +121,30 @@
 
       #character {
         position: absolute;
-        width: 50px;
+        width: 60px;
         height: 60px;
         bottom: calc(118px + env(safe-area-inset-bottom));
         left: 0;
-        font-size: 50px;
-        text-align: center;
-        line-height: 60px;
         z-index: 2;
-        animation: float 3s ease-in-out infinite;
-        filter: drop-shadow(0 4px 8px rgba(255, 182, 193, 0.3));
+        box-sizing: border-box;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 2px solid #fff;
+        background: #fff;
+        box-shadow:
+          0 0 0 2px rgba(255, 182, 193, 0.9),
+          0 6px 12px rgba(155, 107, 155, 0.25);
+      }
+
+      #character img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+        object-position: 38% 42%;
+        transform: scale(1.48);
+        transform-origin: 38% 42%;
+        pointer-events: none;
       }
 
       .heart {
@@ -690,6 +704,67 @@
         transform: translateX(-50%) translateY(0);
       }
 
+      #intro-screen {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: radial-gradient(
+          circle at 50% 42%,
+          rgba(255, 228, 236, 0.96),
+          rgba(255, 248, 250, 0.94) 42%,
+          rgba(255, 255, 255, 0.96)
+        );
+        z-index: 7;
+        overflow: hidden;
+      }
+
+      #intro-screen.is-leaving {
+        animation: veilOut 0.45s ease forwards;
+      }
+
+      @keyframes veilOut {
+        to {
+          opacity: 0;
+        }
+      }
+
+      #intro-lines {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 280px;
+        padding: 0 28px;
+        box-sizing: border-box;
+      }
+
+      #intro-lines .victory-line {
+        font-size: clamp(20px, 5.6vw, 28px);
+        max-width: 18em;
+      }
+
+      #intro-skip {
+        position: absolute;
+        z-index: 2;
+        top: calc(14px + env(safe-area-inset-top));
+        right: 16px;
+        padding: 8px 12px;
+        border: none;
+        background: transparent;
+        color: var(--purple-text);
+        font-size: 15px;
+        opacity: 0.72;
+        cursor: pointer;
+      }
+
       .soft-heart {
         position: absolute;
         bottom: 6%;
@@ -777,6 +852,11 @@
           <div id="music-control" role="button" aria-label="音乐">🔇</div>
         </div>
       </div>
+      <div id="intro-screen">
+        <div class="victory-glow"></div>
+        <div id="intro-lines"></div>
+        <button id="intro-skip" type="button">跳过</button>
+      </div>
       <div id="start-screen">
         <h1>加油王瑞！</h1>
         <p class="start-lead">让我们一起开始这段奇妙的旅程吧！</p>
@@ -793,7 +873,9 @@
         <p id="failure-message"></p>
         <button id="failure-retry-button" type="button">重新挑战</button>
       </div>
-      <div id="character">👩🏻‍⚕️</div>
+      <div id="character">
+        <img src="avatar.jpg" alt="王瑞" />
+      </div>
       <div id="message"></div>
       <div id="controls">
         <div class="control-button" id="left-button">←</div>
@@ -836,16 +918,22 @@
       const bombSound = document.getElementById('bomb-sound')
 
       const messages = [
-        '一起追逐梦想！',
         '今天也要元气满满！',
-        '要一直保持可爱！',
-        '你的笑容最治愈！',
-        '一起去看星星吧！',
+        '宝贝你好帅啊！',
         '遇见你真好！',
         '爱你哦！',
         '你的努力会有回报！',
-        '一起追逐梦想！',
+        '宝贝你好厉害呀！',
         '一起去看星星吧！',
+      ]
+
+      const introLines = [
+        '你误入了一条神秘的小路。',
+        '天上会落下星星和爱心，',
+        '星星是好运，爱心更大的好运。',
+        '偶尔也有调皮的炸弹，那是坏心情。',
+        '接住好的，躲开坏的。',
+        '走到最后吧',
       ]
 
       const victoryLines = [
@@ -864,7 +952,7 @@
       ]
 
       const characterSpeed = 280
-      const characterWidth = 50
+      const characterWidth = 60
       const characterHeight = 60
       const objectSize = 40
       let score = 0
@@ -884,6 +972,8 @@
       let bestScore = Number(localStorage.getItem('bestScore')) || 0
       let messageTimer = null
       let victoryTimers = []
+      let introTimers = []
+      let introFinished = false
       const activeObjects = []
 
       function setMusicPlaying(playing) {
@@ -1105,8 +1195,7 @@
         else showFailureScreen(isBomb, isNewRecord)
       }
 
-      function spawnSoftHearts(count) {
-        const screen = document.getElementById('victory-screen')
+      function spawnSoftHearts(count, screen = document.getElementById('victory-screen'), timers = victoryTimers) {
         const symbols = ['💗', '✨', '🌸', '💌']
         for (let i = 0; i < count; i += 1) {
           const heart = document.createElement('div')
@@ -1116,9 +1205,52 @@
           heart.style.fontSize = `${16 + Math.random() * 14}px`
           heart.style.animationDuration = `${4.2 + Math.random() * 2}s`
           screen.appendChild(heart)
-          victoryTimers.push(setTimeout(() => heart.remove(), 6500))
+          timers.push(setTimeout(() => heart.remove(), 6500))
         }
       }
+
+      function finishIntro() {
+        if (introFinished) return
+        introFinished = true
+        introTimers.forEach((timer) => clearTimeout(timer))
+        introTimers = []
+        const screen = document.getElementById('intro-screen')
+        screen.classList.add('is-leaving')
+        introTimers.push(
+          setTimeout(() => {
+            screen.style.display = 'none'
+          }, 450),
+        )
+      }
+
+      function showIntro() {
+        const screen = document.getElementById('intro-screen')
+        const lines = document.getElementById('intro-lines')
+        const lineNodes = introLines.map((text, index) => {
+          const line = document.createElement('p')
+          line.className = 'victory-line'
+          if (index === introLines.length - 1) line.classList.add('is-last')
+          line.textContent = text
+          lines.appendChild(line)
+          return line
+        })
+
+        lineNodes.forEach((line, index) => {
+          introTimers.push(
+            setTimeout(() => {
+              if (introFinished) return
+              line.classList.add('is-visible')
+              if (index === lineNodes.length - 1) {
+                spawnSoftHearts(6, screen, introTimers)
+                introTimers.push(setTimeout(finishIntro, 1500))
+              }
+            }, 400 + index * 1100),
+          )
+        })
+      }
+
+      document.getElementById('intro-skip').addEventListener('click', finishIntro)
+      showIntro()
 
       function showVictoryScreen() {
         clearVictorySequence()
