@@ -404,26 +404,14 @@
         width: 40px;
         height: 40px;
         z-index: 1;
-        animation: float 2s ease-in-out infinite;
-        filter: drop-shadow(0 4px 8px rgba(255, 255, 255, 0.3));
-        backdrop-filter: blur(5px);
         border-radius: 50%;
         display: flex;
         justify-content: center;
         align-items: center;
         background: rgba(255, 255, 255, 0.2);
         border: 2px solid rgba(255, 255, 255, 0.3);
-      }
-
-      .falling-object::before {
-        content: '';
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        background: inherit;
-        border-radius: inherit;
-        filter: blur(2px);
-        z-index: -1;
+        box-shadow: 0 4px 8px rgba(255, 182, 193, 0.25);
+        will-change: top;
       }
 
       .falling-object.star {
@@ -876,13 +864,19 @@
       ]
 
       const characterSpeed = 280
+      const characterWidth = 50
+      const characterHeight = 60
+      const objectSize = 40
       let score = 0
       let timeLeft = 0
-      let gameInterval = null
-      let timerInterval = null
       let moveRaf = 0
       let lastMoveTs = 0
+      let timeAccumulator = 0
+      let spawnAccumulator = 0
       let characterPosition = 0
+      let characterTop = 0
+      let containerWidth = 0
+      let playfieldHeight = 0
       let isMovingLeft = false
       let isMovingRight = false
       let isMusicPlaying = false
@@ -890,7 +884,7 @@
       let bestScore = Number(localStorage.getItem('bestScore')) || 0
       let messageTimer = null
       let victoryTimers = []
-      const fallIntervals = new Set()
+      const activeObjects = []
 
       function setMusicPlaying(playing) {
         isMusicPlaying = playing
@@ -915,8 +909,14 @@
         })
       })
 
+      function measurePlayfield() {
+        containerWidth = gameContainer.clientWidth
+        playfieldHeight = gameContainer.clientHeight
+        characterTop = character.offsetTop
+      }
+
       function characterMaxX() {
-        return Math.max(0, gameContainer.clientWidth - character.offsetWidth)
+        return Math.max(0, containerWidth - characterWidth)
       }
 
       function centerCharacter() {
@@ -924,20 +924,78 @@
         character.style.left = characterPosition + 'px'
       }
 
-      function updateCharacterPosition(ts) {
-        if (!lastMoveTs) lastMoveTs = ts
-        const dt = Math.min(0.05, (ts - lastMoveTs) / 1000)
-        lastMoveTs = ts
+      function updateCharacterPosition(dt) {
+        let next = characterPosition
         const max = characterMaxX()
-        if (isMovingLeft) characterPosition -= characterSpeed * dt
-        if (isMovingRight) characterPosition += characterSpeed * dt
-        characterPosition = Math.min(max, Math.max(0, characterPosition))
-        character.style.left = characterPosition + 'px'
+        if (isMovingLeft) next -= characterSpeed * dt
+        if (isMovingRight) next += characterSpeed * dt
+        next = Math.min(max, Math.max(0, next))
+        if (next === characterPosition) return
+        characterPosition = next
+        character.style.left = next + 'px'
+      }
+
+      function updateClock(dt) {
+        timeAccumulator += dt
+        while (timeAccumulator >= 1) {
+          timeAccumulator -= 1
+          timeLeft += 1
+          const minutes = Math.floor(timeLeft / 60)
+          const seconds = timeLeft % 60
+          timerElement.textContent = `时间: ${minutes}:${seconds.toString().padStart(2, '0')}`
+          if (timeLeft >= 320) {
+            endGame(true)
+            return
+          }
+        }
+
+        spawnAccumulator += dt
+        while (spawnAccumulator >= 1.5) {
+          spawnAccumulator -= 1.5
+          createFallingObject()
+        }
+      }
+
+      function updateFallingObjects(dt) {
+        const charLeft = characterPosition
+        const charRight = characterPosition + characterWidth
+        const charTop = characterTop
+        const charBottom = characterTop + characterHeight
+
+        for (let i = activeObjects.length - 1; i >= 0; i -= 1) {
+          const obj = activeObjects[i]
+          obj.y += obj.speed * dt
+          obj.node.style.top = obj.y + 'px'
+
+          const hit =
+            obj.y + objectSize >= charTop &&
+            obj.y <= charBottom &&
+            obj.x + objectSize >= charLeft &&
+            obj.x <= charRight
+
+          if (hit) {
+            collectObject(i)
+            if (!gameActive) return
+            continue
+          }
+
+          if (obj.y > playfieldHeight) {
+            obj.node.remove()
+            activeObjects.splice(i, 1)
+          }
+        }
       }
 
       function movementLoop(ts) {
         if (!gameActive) return
-        updateCharacterPosition(ts)
+        if (!lastMoveTs) lastMoveTs = ts
+        const dt = Math.min(0.05, (ts - lastMoveTs) / 1000)
+        lastMoveTs = ts
+        updateCharacterPosition(dt)
+        updateFallingObjects(dt)
+        if (!gameActive) return
+        updateClock(dt)
+        if (!gameActive) return
         moveRaf = requestAnimationFrame(movementLoop)
       }
 
@@ -979,15 +1037,10 @@
       }
 
       function stopLoops() {
-        clearInterval(gameInterval)
-        clearInterval(timerInterval)
-        gameInterval = null
-        timerInterval = null
         cancelAnimationFrame(moveRaf)
         moveRaf = 0
-        fallIntervals.forEach((id) => clearInterval(id))
-        fallIntervals.clear()
-        document.querySelectorAll('.falling-object').forEach((node) => node.remove())
+        activeObjects.forEach((obj) => obj.node.remove())
+        activeObjects.length = 0
       }
 
       function clearVictorySequence() {
@@ -1017,8 +1070,11 @@
         timerElement.textContent = '时间: 0:00'
         messageElement.style.opacity = 0
         messageElement.classList.remove('show')
+        measurePlayfield()
         centerCharacter()
         gameActive = true
+        timeAccumulator = 0
+        spawnAccumulator = 0
 
         if (!isMusicPlaying) {
           playBgm().catch((error) => {
@@ -1027,15 +1083,6 @@
         }
 
         createFallingObject()
-        gameInterval = setInterval(createFallingObject, 1500)
-        timerInterval = setInterval(() => {
-          timeLeft += 1
-          const minutes = Math.floor(timeLeft / 60)
-          const seconds = timeLeft % 60
-          timerElement.textContent = `时间: ${minutes}:${seconds.toString().padStart(2, '0')}`
-          if (timeLeft >= 320) endGame(true)
-        }, 1000)
-
         lastMoveTs = 0
         moveRaf = requestAnimationFrame(movementLoop)
       }
@@ -1143,6 +1190,7 @@
       }
 
       updateBestScoreDisplay()
+      measurePlayfield()
       centerCharacter()
 
       function createSparkle() {
@@ -1158,12 +1206,33 @@
       setInterval(createSparkle, 900)
 
       window.addEventListener('resize', () => {
+        measurePlayfield()
         if (!gameActive) centerCharacter()
         else {
           characterPosition = Math.min(characterMaxX(), Math.max(0, characterPosition))
           character.style.left = characterPosition + 'px'
         }
       })
+
+      function collectObject(index) {
+        const obj = activeObjects[index]
+        obj.node.remove()
+        activeObjects.splice(index, 1)
+
+        obj.sound.currentTime = 0
+        obj.sound.play().catch((error) => console.log('音效播放失败:', error))
+
+        if (obj.type === 'bomb') {
+          character.classList.add('shake')
+          setTimeout(() => character.classList.remove('shake'), 500)
+          endGame(false, true)
+          return
+        }
+
+        score += obj.points
+        updateScoreDisplay()
+        if (gameActive && obj.type === 'heart') showMessage()
+      }
 
       function createFallingObject() {
         if (!gameActive) return
@@ -1181,61 +1250,22 @@
         }
         if (!selectedObject) return
 
-        const fallingObject = document.createElement('div')
-        fallingObject.className = `falling-object ${selectedObject.type}`
-        fallingObject.style.left = Math.random() * (gameContainer.offsetWidth - 40) + 'px'
-        fallingObject.style.top = '-40px'
-        gameContainer.appendChild(fallingObject)
+        const node = document.createElement('div')
+        node.className = `falling-object ${selectedObject.type}`
+        const x = Math.random() * Math.max(0, containerWidth - objectSize)
+        node.style.left = x + 'px'
+        node.style.top = '-40px'
+        gameContainer.appendChild(node)
 
-        let objectPosition = -40
-        const fallSpeed = 3 + Math.floor(timeLeft / 30) * 0.2
-        const fallInterval = setInterval(() => {
-          if (!gameActive || !fallingObject.isConnected) {
-            clearInterval(fallInterval)
-            fallIntervals.delete(fallInterval)
-            fallingObject.remove()
-            return
-          }
-
-          objectPosition += fallSpeed
-          fallingObject.style.top = objectPosition + 'px'
-
-          const characterRect = character.getBoundingClientRect()
-          const objectRect = fallingObject.getBoundingClientRect()
-
-          if (
-            objectRect.bottom >= characterRect.top &&
-            objectRect.top <= characterRect.bottom &&
-            objectRect.right >= characterRect.left &&
-            objectRect.left <= characterRect.right
-          ) {
-            clearInterval(fallInterval)
-            fallIntervals.delete(fallInterval)
-            fallingObject.remove()
-
-            selectedObject.sound.currentTime = 0
-            selectedObject.sound.play().catch((error) => console.log('音效播放失败:', error))
-
-            if (selectedObject.type === 'bomb') {
-              character.classList.add('shake')
-              setTimeout(() => character.classList.remove('shake'), 500)
-              endGame(false, true)
-              return
-            }
-
-            score += selectedObject.points
-            updateScoreDisplay()
-            if (gameActive && selectedObject.type === 'heart') showMessage()
-            return
-          }
-
-          if (objectPosition > gameContainer.offsetHeight) {
-            clearInterval(fallInterval)
-            fallIntervals.delete(fallInterval)
-            fallingObject.remove()
-          }
-        }, 50)
-        fallIntervals.add(fallInterval)
+        activeObjects.push({
+          node,
+          x,
+          y: -40,
+          speed: (3 + Math.floor(timeLeft / 30) * 0.2) * 20,
+          type: selectedObject.type,
+          points: selectedObject.points || 0,
+          sound: selectedObject.sound,
+        })
       }
     </script>
   </body>
